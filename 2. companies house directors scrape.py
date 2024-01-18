@@ -15,6 +15,7 @@ companies = get_companies(DATA_DIR)
 #Create list from Series to populate API queries
 company_nos = companies.company_no.tolist()
 
+
 #Upload API key from main folder
 api_key = open(f"{DATA_DIR}/api_key.txt", "r")
 api_key = (api_key.read())
@@ -27,34 +28,45 @@ status_codes = {}
 dir_dump_list = []
 
 request_number = 0
+items_per_page = 35 
 
-for item in tqdm(company_nos):
-    if request_number > 1100:
-        print("sleeping")
-        time.sleep(300)
-        request_number = 0
-    else: pass
-    response = requests.get(f"{base_url}{item}/officers",auth=(api_key,''))
-    request_number = request_number + 1 
-    status_codes[item] = {}
-    status_codes[item]['status_code'] = response.status_code
-    status_codes[item]['timestamp'] = str(datetime.now())
-    status_codes[item]['request_number'] = request_number 
-    if response.status_code == 429:
-        print("429_sleeping")
-        time.sleep(300)
-        request_number = 0
-        continue
-    else: pass
-    if response.status_code != 200:
-        continue
-    else: pass
-    json_search_result = response.text
-    data = json.JSONDecoder().decode(json_search_result)
-    for item in data['items']:
-        dir_dump_list.append(item)
-    for item in data['items']:
-        dir_list.append(item['links']['officer']['appointments'])
+for company_no in tqdm(company_nos):
+    start_index = 0
+    total_results = float('inf')
+
+    while start_index < total_results:
+        if request_number > 1100:
+            print("sleeping")
+            time.sleep(300)
+            request_number = 0
+        else:
+            pass
+
+        response = requests.get(f"{base_url}{company_no}/officers?start_index={start_index}&items_per_page={items_per_page}", auth=(api_key, ''))
+        request_number += 1
+
+        status_codes[company_no] = {
+            'status_code': response.status_code,
+            'timestamp': str(datetime.now()),
+            'request_number': request_number
+        }
+
+        if response.status_code == 429:
+            print("429_sleeping")
+            time.sleep(300)
+            request_number = 0
+            continue
+        elif response.status_code != 200:
+            break
+
+        data = json.loads(response.text)
+        total_results = data['total_results']  
+
+        for item in data['items']:
+            dir_dump_list.append(item)
+            dir_list.append(item['links']['officer']['appointments'])
+
+        start_index += items_per_page
 
 dir_info = pd.json_normalize(dir_dump_list)
 dir_search_statuses = pd.DataFrame.from_dict(status_codes)

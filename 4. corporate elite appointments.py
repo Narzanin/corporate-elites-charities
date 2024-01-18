@@ -6,6 +6,7 @@ from datetime import datetime
 from tqdm import tqdm
 from getters import get_corporate_elite
 from utils import PROJECT_DIR
+from requests.exceptions import ConnectionError
 
 DATA_DIR = f'{PROJECT_DIR}/'
 
@@ -16,11 +17,11 @@ corporate_elite = get_corporate_elite(DATA_DIR)
 director_ids = (
     corporate_elite['director_id'].drop_duplicates() 
     .tolist()
-    )
+)
 
 #Upload API key from main folder
-api_key = open(f"{DATA_DIR}/api_key.txt", "r")
-api_key = (api_key.read())
+with open(f"{DATA_DIR}/api_key.txt", "r") as file:
+    api_key = file.read().strip()
 
 #URL for company officers list
 base_url = "https://api.company-information.service.gov.uk/"
@@ -29,42 +30,56 @@ dir_list = []
 status_codes = {}
 
 request_number = 0
+items_per_page = 35  # Set according to the API's maximum allowed value
 
 for director_id in tqdm(director_ids):
-    if request_number > 1100:
-        print("sleeping")
-        time.sleep(300)
-        request_number = 0
-    else: pass
-    search_term = '/officers/' + director_id + '/appointments'
-    response = requests.get(f"{base_url}{search_term}/",auth=(api_key,''))
-    request_number = request_number + 1 
-    status_codes[director_id] = {}
-    status_codes[director_id]['status_code'] = response.status_code
-    status_codes[director_id]['timestamp'] = str(datetime.now())
-    status_codes[director_id]['request_number'] = request_number 
-    if response.status_code == 429:
-        print("429_sleeping")
-        time.sleep(300)
-        request_number = 0
-        continue
-    else: pass
-    if response.status_code != 200:
-        continue
-    else: pass
-    json_search_result = response.text
-    data = json.JSONDecoder().decode(json_search_result)
-    dir_info = pd.json_normalize(data['items'])
-    dir_info.insert(loc = 0,
-              column = 'director_id',
-              value = director_id)
-    dir_list.append(dir_info)
+    start_index = 0
+    total_results = float('inf')
 
-status_codes = pd.DataFrame.from_dict(status_codes)
-status_codes = status_codes.T
+    while start_index < total_results:
+        if request_number > 1100:
+            print("Sleeping to reset request count")
+            time.sleep(300)
+            request_number = 0
+
+        search_term = '/officers/' + director_id + '/appointments'
+
+        try:
+            response = requests.get(f"{base_url}{search_term}/", auth=(api_key, ''))
+            request_number += 1
+
+            status_codes[director_id] = {
+                'status_code': response.status_code,
+                'timestamp': str(datetime.now()),
+                'request_number': request_number
+            }
+
+            if response.status_code == 429:
+                print("Rate limit reached, sleeping...")
+                time.sleep(300)
+                request_number = 0
+                continue
+            elif response.status_code != 200:
+                break
+
+            data = json.loads(response.text)
+            total_results = data.get('total_results', total_results)  
+
+            dir_info = pd.json_normalize(data['items'])
+            dir_info.insert(loc=0, column='director_id', value=director_id)
+            dir_list.append(dir_info)
+
+            start_index += items_per_page
+
+        except ConnectionError as e:
+            print(f"Connection error occurred: {e}. Retrying...")
+            time.sleep(60)  # Wait for a minute before retrying
+            continue  # Retry the current loop iteration
+
+status_codes = pd.DataFrame.from_dict(status_codes, orient='index')
 
 corporate_elite_appointments = pd.concat(dir_list, ignore_index=True)
 
 #Export appointments data and search statuses as csvs
 corporate_elite_appointments.to_csv(f'{DATA_DIR}/outputs/corporate_elite_appointments.csv', index=False)
-status_codes.to_csv(f'{DATA_DIR}/outputs/corproate_elite_appointment_search_statuses.csv', index=True)
+status_codes.to_csv(f'{DATA_DIR}/outputs/corporate_elite_appointment_search_statuses.csv', index=True)
